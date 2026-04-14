@@ -522,7 +522,7 @@ def main():
         # ── AI Settings (collapsed by default) ──────────────────────────────
         with st.expander("⚙️ AI Settings", expanded=False):
             provider_names = list(PROVIDERS.keys())
-            saved_provider = config.get("provider","Claude (Anthropic)")
+            saved_provider = config.get("provider","ChatGPT (OpenAI)")
             if "provider" not in st.session_state:
                 st.session_state.provider = saved_provider
 
@@ -575,8 +575,10 @@ def main():
 
                 api_key = st.session_state.get(skey, "")
 
+            saved_model = config.get("model", prov["models"][0])
+            model_index = prov["models"].index(saved_model) if saved_model in prov["models"] else 0
             model = st.selectbox("Model", options=prov["models"],
-                                 index=0, help=prov["model_help"])
+                                 index=model_index, help=prov["model_help"])
 
         st.divider()
 
