@@ -664,28 +664,67 @@ def main():
         st.caption("🔐 Keys stored locally only. Never shared.")
 
     # ═══════════════════════════════════════════
+    # SESSION STATE INIT
+    # ═══════════════════════════════════════════
+    if "jd_library"        not in st.session_state: st.session_state.jd_library = {}
+    if "screening_history" not in st.session_state: st.session_state.screening_history = []
+
+    # ═══════════════════════════════════════════
     # MAIN AREA
     # ═══════════════════════════════════════════
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("📋 Step 1: Job Description")
+
+        # ── Load from JD Library ──────────────────────────────────────────────
+        jd_library = st.session_state.jd_library
+        if jd_library:
+            lib_options = ["— New JD —"] + list(jd_library.keys())
+            selected_jd = st.selectbox("📂 Load saved JD", lib_options, key="jd_library_select")
+        else:
+            selected_jd = "— New JD —"
+            st.caption("💡 No saved JDs yet — save one below after entering it.")
+
         jd_mode = st.radio("Input method", ["Upload file (PDF/DOCX)", "Paste JD text"],
                            horizontal=True, key="jd_input_mode")
         jd_file = None
         jd_pasted_text = ""
         jd_pasted_name = "Pasted JD"
 
+        # Pre-fill from library if selected
+        prefill_text = jd_library.get(selected_jd, "") if selected_jd != "— New JD —" else ""
+        prefill_name = selected_jd if selected_jd != "— New JD —" else "Pasted JD"
+
         if jd_mode == "Upload file (PDF/DOCX)":
             jd_file = st.file_uploader("Upload JD", type=["pdf","docx"], key="jd_uploader")
             if jd_file: st.success(f"✅ {jd_file.name}")
         else:
             jd_pasted_name = st.text_input("JD title (optional)",
+                value=prefill_name if prefill_name != "Pasted JD" else "",
                 placeholder="e.g. Senior Data Engineer – Databricks", key="jd_paste_name") or "Pasted JD"
             jd_pasted_text = st.text_area("Paste Job Description",
-                placeholder="Paste the full JD here…", height=260, key="jd_paste_text")
+                value=prefill_text,
+                placeholder="Paste the full JD here…", height=200, key="jd_paste_text")
             if jd_pasted_text.strip():
                 st.success(f"✅ JD ready ({len(jd_pasted_text):,} chars)")
+                # Save to library button
+                save_col, del_col = st.columns([3, 1])
+                with save_col:
+                    save_jd_name = st.text_input("Save as", value=jd_pasted_name,
+                                                  placeholder="e.g. Senior DE – Databricks",
+                                                  key="save_jd_name_input")
+                with del_col:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("💾 Save JD", key="save_jd_btn"):
+                        if save_jd_name.strip():
+                            st.session_state.jd_library[save_jd_name.strip()] = jd_pasted_text.strip()
+                            st.success(f"✅ Saved '{save_jd_name.strip()}' to JD Library")
+                            st.rerun()
+                if selected_jd != "— New JD —":
+                    if st.button(f"🗑️ Remove '{selected_jd}' from library", key="del_jd_btn"):
+                        del st.session_state.jd_library[selected_jd]
+                        st.rerun()
 
     with col2:
         st.subheader("👥 Step 2: Candidate Profiles")
@@ -844,6 +883,24 @@ def main():
         results.sort(key=lambda x: x.get("overall_score", 0), reverse=True)
         st.session_state["results"]  = results
         st.session_state["jd_name"]  = eff_jd_name
+
+        # ── Append to screening history ───────────────────────────────────────
+        for r in results:
+            st.session_state.screening_history.append({
+                "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "jd_name":    eff_jd_name,
+                "candidate":  r.get("file","—").rsplit(".",1)[0] if "." in r.get("file","") else r.get("file","—"),
+                "score":      r.get("overall_score", 0),
+                "verdict":    r.get("verdict", "N/A"),
+                "confidence": r.get("confidence_level", "N/A"),
+                "seniority":  r.get("seniority_alignment", "N/A"),
+                "must_have":  r.get("must_have_match_pct", 0),
+                "experience": r.get("experience_match_pct", 0),
+                "mandatory_met": r.get("mandatory_met", True),
+                "strengths":  r.get("key_strengths", []),
+                "gaps":       r.get("key_gaps", []),
+                "explanation": r.get("final_explanation", ""),
+            })
 
     # ── Display results ───────────────────────────────────────────────────────
     if not st.session_state.get("results"):
@@ -1063,7 +1120,7 @@ def main():
                 st.info(r.get("final_explanation","—"))
 
 
-    # ── Download ──────────────────────────────────────────────────────────────
+    # ── Download current results ───────────────────────────────────────────────
     st.divider()
     excel_bytes = generate_excel(results, jd_name)
     st.download_button(
@@ -1073,6 +1130,140 @@ def main():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SCREENING HISTORY
+    # ══════════════════════════════════════════════════════════════════════════
+    history = st.session_state.get("screening_history", [])
+    if history:
+        st.divider()
+        st.subheader("📚 Screening History")
+        st.caption(f"{len(history)} candidate(s) screened this session across all JDs")
+
+        # ── Filters ───────────────────────────────────────────────────────────
+        hf1, hf2, hf3 = st.columns(3)
+        with hf1:
+            jd_options = ["All JDs"] + sorted(set(h["jd_name"] for h in history))
+            filter_jd = st.selectbox("Filter by JD", jd_options, key="hist_filter_jd")
+        with hf2:
+            verdict_options = ["All Verdicts", "Strong Select", "Consider", "Reject"]
+            filter_verdict = st.selectbox("Filter by Verdict", verdict_options, key="hist_filter_verdict")
+        with hf3:
+            search_name = st.text_input("Search candidate", placeholder="Type name…", key="hist_search")
+
+        filtered = history
+        if filter_jd != "All JDs":
+            filtered = [h for h in filtered if h["jd_name"] == filter_jd]
+        if filter_verdict != "All Verdicts":
+            filtered = [h for h in filtered if h["verdict"] == filter_verdict]
+        if search_name.strip():
+            filtered = [h for h in filtered if search_name.lower() in h["candidate"].lower()]
+
+        filtered_sorted = sorted(filtered, key=lambda x: x["score"], reverse=True)
+
+        # ── Summary table ─────────────────────────────────────────────────────
+        st.markdown(f"**Showing {len(filtered_sorted)} of {len(history)} records**")
+
+        # Table header
+        st.markdown("""
+| # | Candidate | JD | Score | Verdict | Must-Have % | Experience % | Screened On |
+|:--|:----------|:---|------:|:--------|------------:|-------------:|:------------|""")
+
+        for idx, h in enumerate(filtered_sorted, 1):
+            v = h["verdict"]
+            if v == "Strong Select":   vbadge = "🟢 Strong Select"
+            elif v == "Consider":      vbadge = "🟡 Consider"
+            elif v == "Reject":        vbadge = "🔴 Reject"
+            else:                      vbadge = "⚪ N/A"
+            if not h.get("mandatory_met", True): vbadge = "⛔ Rejected"
+
+            st.markdown(
+                f"| {idx} | **{h['candidate']}** | {h['jd_name']} | "
+                f"**{h['score']}%** | {vbadge} | {h['must_have']}% | "
+                f"{h['experience']}% | {h['timestamp']} |"
+            )
+
+        # ── Expandable detail per candidate ───────────────────────────────────
+        st.markdown("---")
+        st.markdown("##### Details")
+        for h in filtered_sorted:
+            v = h["verdict"]
+            badge = "🟢" if v=="Strong Select" else ("🟡" if v=="Consider" else "🔴")
+            with st.expander(f"{badge} {h['candidate']}  —  {h['score']}%  |  {h['jd_name']}  |  {h['timestamp']}"):
+                d1, d2 = st.columns(2)
+                with d1:
+                    st.markdown(f"**Verdict:** {h['verdict']}  \n**Confidence:** {h['confidence']}  \n**Seniority:** {h['seniority']}")
+                    if h.get("strengths"):
+                        st.markdown("**Strengths:**")
+                        for s in h["strengths"]: st.markdown(f"  • {s}")
+                with d2:
+                    if h.get("gaps"):
+                        st.markdown("**Gaps:**")
+                        for g in h["gaps"]: st.markdown(f"  • {g}")
+                if h.get("explanation"):
+                    st.info(h["explanation"])
+
+        # ── Export / Import history ────────────────────────────────────────────
+        st.markdown("---")
+        exp_col, imp_col, clr_col = st.columns(3)
+
+        with exp_col:
+            history_json = json.dumps(st.session_state.screening_history, indent=2)
+            st.download_button(
+                "📥 Export History (JSON)",
+                data=history_json,
+                file_name=f"screening_history_{datetime.now().strftime('%Y%m%d')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with imp_col:
+            uploaded_hist = st.file_uploader("📤 Import History (JSON)",
+                                              type=["json"], key="import_history_uploader")
+            if uploaded_hist:
+                try:
+                    imported = json.loads(uploaded_hist.read())
+                    existing_keys = {(h["candidate"], h["timestamp"]) for h in st.session_state.screening_history}
+                    added = 0
+                    for entry in imported:
+                        if (entry.get("candidate"), entry.get("timestamp")) not in existing_keys:
+                            st.session_state.screening_history.append(entry)
+                            added += 1
+                    st.success(f"✅ Imported {added} new record(s)")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to import: {e}")
+        with clr_col:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🗑️ Clear History", key="clear_history_btn", use_container_width=True):
+                st.session_state.screening_history = []
+                st.rerun()
+
+        # ── JD Library export/import ───────────────────────────────────────────
+        if st.session_state.jd_library:
+            st.markdown("---")
+            st.markdown("##### 📂 JD Library")
+            st.caption(f"{len(st.session_state.jd_library)} JD(s) saved this session")
+            jl_exp, jl_imp = st.columns(2)
+            with jl_exp:
+                jd_lib_json = json.dumps(st.session_state.jd_library, indent=2)
+                st.download_button(
+                    "📥 Export JD Library (JSON)",
+                    data=jd_lib_json,
+                    file_name=f"jd_library_{datetime.now().strftime('%Y%m%d')}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+            with jl_imp:
+                uploaded_jdlib = st.file_uploader("📤 Import JD Library (JSON)",
+                                                   type=["json"], key="import_jdlib_uploader")
+                if uploaded_jdlib:
+                    try:
+                        imported_lib = json.loads(uploaded_jdlib.read())
+                        st.session_state.jd_library.update(imported_lib)
+                        st.success(f"✅ Loaded {len(imported_lib)} JD(s)")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Failed to import JD library: {e}")
 
 
 if __name__ == "__main__":
