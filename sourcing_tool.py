@@ -698,29 +698,46 @@ def main():
 
         if jd_mode == "Upload file (PDF/DOCX)":
             jd_file = st.file_uploader("Upload JD", type=["pdf","docx"], key="jd_uploader")
-            if jd_file: st.success(f"✅ {jd_file.name}")
+            if jd_file:
+                st.success(f"✅ {jd_file.name}")
+                # Allow saving uploaded JD to library
+                save_jd_name = st.text_input("Save to JD Library as (optional)",
+                    value=jd_file.name.rsplit(".",1)[0],
+                    placeholder="e.g. Senior Data Engineer",
+                    key="save_jd_name_input")
+                if st.button("💾 Save this JD to Library", key="save_jd_btn"):
+                    if save_jd_name.strip():
+                        jd_bytes = jd_file.read(); jd_file.seek(0)
+                        extracted = extract_pdf(jd_bytes) if jd_file.name.lower().endswith(".pdf") else extract_docx(jd_bytes)
+                        if extracted.strip():
+                            st.session_state.jd_library[save_jd_name.strip()] = extracted.strip()
+                            st.success(f"✅ Saved '{save_jd_name.strip()}' to JD Library")
+                            st.rerun()
+                        else:
+                            st.warning("Could not extract text from this file to save.")
         else:
-            jd_pasted_name = st.text_input("JD title (optional)",
+            jd_pasted_name = st.text_input("JD title",
                 value=prefill_name if prefill_name != "Pasted JD" else "",
                 placeholder="e.g. Senior Data Engineer – Databricks", key="jd_paste_name") or "Pasted JD"
             jd_pasted_text = st.text_area("Paste Job Description",
                 value=prefill_text,
                 placeholder="Paste the full JD here…", height=200, key="jd_paste_text")
+
             if jd_pasted_text.strip():
                 st.success(f"✅ JD ready ({len(jd_pasted_text):,} chars)")
-                # Save to library button
-                save_col, del_col = st.columns([3, 1])
-                with save_col:
-                    save_jd_name = st.text_input("Save as", value=jd_pasted_name,
-                                                  placeholder="e.g. Senior DE – Databricks",
-                                                  key="save_jd_name_input")
-                with del_col:
+                sa_col, sb_col = st.columns([3, 2])
+                with sa_col:
+                    save_jd_name = st.text_input("Save to JD Library as",
+                        value=jd_pasted_name if jd_pasted_name != "Pasted JD" else "",
+                        placeholder="e.g. Senior Data Engineer",
+                        key="save_jd_name_input")
+                with sb_col:
                     st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("💾 Save JD", key="save_jd_btn"):
-                        if save_jd_name.strip():
-                            st.session_state.jd_library[save_jd_name.strip()] = jd_pasted_text.strip()
-                            st.success(f"✅ Saved '{save_jd_name.strip()}' to JD Library")
-                            st.rerun()
+                    if st.button("💾 Save to Library", key="save_jd_btn", use_container_width=True):
+                        name_to_save = save_jd_name.strip() or jd_pasted_name
+                        st.session_state.jd_library[name_to_save] = jd_pasted_text.strip()
+                        st.success(f"✅ Saved '{name_to_save}'")
+                        st.rerun()
                 if selected_jd != "— New JD —":
                     if st.button(f"🗑️ Remove '{selected_jd}' from library", key="del_jd_btn"):
                         del st.session_state.jd_library[selected_jd]
