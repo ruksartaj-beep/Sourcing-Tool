@@ -265,7 +265,6 @@ Do NOT invent requirements that appear in neither the JD nor the Additional Crit
 
 {mandatory_section}
 {additional_section}
-{panel_section}
 {skills_section}
 
 ════════════════════════════════════════════
