@@ -527,19 +527,15 @@ def main():
     # ── Logo ──────────────────────────────────────────────────────────────────
     logo_path = Path(__file__).parent / "DN Logo.jpg"
     if logo_path.exists():
-        st.logo(str(logo_path))
+        st.logo(str(logo_path), size="large")
 
     # ── Header ────────────────────────────────────────────────────────────────
     if logo_path.exists():
-        hcol1, hcol2 = st.columns([1, 3])
-        with hcol1:
-            st.image(str(logo_path), width=220)
-        with hcol2:
-            st.title("🎯 AI Profile Ranker")
-            st.caption("Evaluate and rank candidates — powered by Claude, ChatGPT, Groq, Gemini, Mistral and more")
-    else:
-        st.title("🎯 AI Profile Ranker")
-        st.caption("Evaluate and rank candidates — powered by Claude, ChatGPT, Groq, Gemini, Mistral and more")
+        _, logo_col, _ = st.columns([1, 2, 1])
+        with logo_col:
+            st.image(str(logo_path), use_container_width=True)
+    st.title("🎯 AI Profile Ranker")
+    st.caption("Evaluate and rank candidates — powered by Claude, ChatGPT, Groq, Gemini, Mistral and more")
     st.divider()
 
     # ═══════════════════════════════════════════
