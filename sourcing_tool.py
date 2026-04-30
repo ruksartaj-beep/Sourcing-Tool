@@ -178,20 +178,20 @@ def is_image_based_pdf(file_bytes: bytes) -> bool:
 def _call_llm(provider: str, api_key: str, model: str, prompt: str) -> str:
     if provider == "Claude (Anthropic)":
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(model=model, max_tokens=2400,
+        msg = client.messages.create(model=model, max_tokens=4000,
                                      messages=[{"role": "user", "content": prompt}])
         return msg.content[0].text.strip()
     elif provider == "ChatGPT (OpenAI)":
         from openai import OpenAI
         r = OpenAI(api_key=api_key).chat.completions.create(
             model=model, messages=[{"role": "user", "content": prompt}],
-            max_tokens=2400, temperature=0.0)
+            max_tokens=4000, temperature=0.0)
         return r.choices[0].message.content.strip()
     elif provider == "Groq (Free / Fast)":
         from groq import Groq
         r = Groq(api_key=api_key).chat.completions.create(
             model=model, messages=[{"role": "user", "content": prompt}],
-            max_tokens=2400, temperature=0.0)
+            max_tokens=4000, temperature=0.0)
         return r.choices[0].message.content.strip()
     elif provider == "Gemini (Google)":
         import google.generativeai as genai
@@ -201,7 +201,7 @@ def _call_llm(provider: str, api_key: str, model: str, prompt: str) -> str:
         from openai import OpenAI
         r = OpenAI(api_key=api_key, base_url="https://api.mistral.ai/v1").chat.completions.create(
             model=model, messages=[{"role": "user", "content": prompt}],
-            max_tokens=2400, temperature=0.0)
+            max_tokens=4000, temperature=0.0)
         return r.choices[0].message.content.strip()
     else:
         raise ValueError(f"Unknown provider: {provider}")
@@ -397,14 +397,14 @@ OUTPUT — Return ONLY valid JSON, no markdown:
 ════════════════════════════════════════════
 
 JOB DESCRIPTION:
-{jd_text[:5000]}
+{jd_text[:6000]}
 
 ---
 
 CANDIDATE PROFILE: {file_name}
-{profile_text[:6000]}
+{profile_text[:15000]}
 
-Evaluate strictly against the JD above. Return only JSON."""
+Evaluate strictly against the JD and Additional Criteria above. Return only JSON."""
 
     raw = _call_llm(provider, api_key, model, prompt)
     m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
