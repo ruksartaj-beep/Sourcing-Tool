@@ -221,20 +221,28 @@ Never penalise a candidate for not having something the JD does not ask for.
 ════════════════════════════════════════════
 PART A — CV PROFILE EXTRACTION
 ════════════════════════════════════════════
-Extract factual information directly from the resume:
+Extract factual information directly from the resume. Be thorough — read the ENTIRE document.
 
-1. WORK HISTORY — every role in reverse chronological order:
-   company, job title, start date, end date (or "Present"), duration in months.
-   If dates are unclear, estimate conservatively.
+1. WORK HISTORY — list EVERY role in reverse chronological order:
+   - company name, job title, start month/year, end month/year (or "Present")
+   - Calculate duration_months precisely. If only years given (e.g. 2020–2021), estimate as 12 months.
+   - short_tenure: set to TRUE if duration_months < 12. THIS IS MANDATORY — check every single role without exception.
+   - Multiple roles at the same company count as one employer but list each role separately.
 
-2. TOTAL EXPERIENCE — sum of all working months (excluding gaps), convert to years and months.
+2. TOTAL EXPERIENCE — sum ALL duration_months across all roles (excluding gap periods), then express as years and months label.
 
-3. JOB CHANGES — count of distinct employers (not multiple roles at same company).
+3. JOB CHANGES — count of DISTINCT employers only (not role changes within the same company).
 
-4. EDUCATION — all degrees: qualification, field, institution, year.
+4. EDUCATION — search the ENTIRE resume carefully. Look for ANY of these keywords or section headings:
+   Education · Educational Background · Academic Qualifications · Academics · Qualifications
+   Degree · Bachelor · Master · MBA · PhD · B.Tech · B.E · B.Sc · M.Tech · M.Sc · MCA · BCA · Diploma · HSC · SSC
+   University · College · Institute · School · Graduated · Year of Passing
+   If found, extract: degree type, field of study, institution name, year.
+   IMPORTANT: If you see any degree abbreviation anywhere in the resume (e.g. "B.Tech", "MBA", "M.Sc"), include it. Do NOT return an empty education list unless the resume truly has zero academic credentials anywhere.
 
-5. CAREER GAPS — any gap > 3 months between roles:
-   from date, to date, duration months, any explanation stated in the resume.
+5. CAREER GAPS — any gap > 3 months between consecutive roles:
+   from date, to date, duration_months, any explanation stated in the resume.
+   If no gaps exist, return an empty array [].
 
 ════════════════════════════════════════════
 PART B — SKILL MATCH (JD-DRIVEN ONLY)
@@ -255,7 +263,7 @@ Start from 100. Deduct only for gaps that matter to THIS JD:
 - Each missing must-have skill from the JD: -10 pts each
 - Experience below JD-required years by more than 2 years: -12 pts
 - Role or domain clearly irrelevant to the JD: -15 pts
-- Job hopping (2+ employers < 12 months in last 5 years): -10 pts
+- Job hopping: if 2 or more DISTINCT employers had tenure < 12 months in the last 5 years: -10 pts. Count each short-tenure employer separately.
 - Unexplained career gap > 6 months: -8 pts
 - Each verified skill (from skills_to_verify) marked Absent: -5 pts
 - Panel feedback weakness present in this resume: -10 pts per issue
@@ -506,6 +514,12 @@ def generate_excel(results: list, jd_name: str) -> io.BytesIO:
     return out
 
 
+# ── Shared persistent store (survives browser refresh, shared across all users) ─
+@st.cache_resource
+def _store():
+    return {"history": [], "jd_library": {}}
+
+
 # ── Main App ──────────────────────────────────────────────────────────────────
 def main():
     config = load_config()
@@ -664,10 +678,9 @@ def main():
         st.caption("🔐 Keys stored locally only. Never shared.")
 
     # ═══════════════════════════════════════════
-    # SESSION STATE INIT
+    # SHARED STORE (persists across refreshes)
     # ═══════════════════════════════════════════
-    if "jd_library"        not in st.session_state: st.session_state.jd_library = {}
-    if "screening_history" not in st.session_state: st.session_state.screening_history = []
+    shared = _store()
 
     # ═══════════════════════════════════════════
     # MAIN AREA
@@ -678,7 +691,7 @@ def main():
         st.subheader("📋 Step 1: Job Description")
 
         # ── Load from JD Library ──────────────────────────────────────────────
-        jd_library = st.session_state.jd_library
+        jd_library = shared["jd_library"]
         if jd_library:
             lib_options = ["— New JD —"] + list(jd_library.keys())
             selected_jd = st.selectbox("📂 Load saved JD", lib_options, key="jd_library_select")
@@ -710,7 +723,7 @@ def main():
                         jd_bytes = jd_file.read(); jd_file.seek(0)
                         extracted = extract_pdf(jd_bytes) if jd_file.name.lower().endswith(".pdf") else extract_docx(jd_bytes)
                         if extracted.strip():
-                            st.session_state.jd_library[save_jd_name.strip()] = extracted.strip()
+                            shared["jd_library"][save_jd_name.strip()] = extracted.strip()
                             st.success(f"✅ Saved '{save_jd_name.strip()}' to JD Library")
                             st.rerun()
                         else:
@@ -735,12 +748,12 @@ def main():
                     st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("💾 Save to Library", key="save_jd_btn", use_container_width=True):
                         name_to_save = save_jd_name.strip() or jd_pasted_name
-                        st.session_state.jd_library[name_to_save] = jd_pasted_text.strip()
+                        shared["jd_library"][name_to_save] = jd_pasted_text.strip()
                         st.success(f"✅ Saved '{name_to_save}'")
                         st.rerun()
                 if selected_jd != "— New JD —":
                     if st.button(f"🗑️ Remove '{selected_jd}' from library", key="del_jd_btn"):
-                        del st.session_state.jd_library[selected_jd]
+                        del shared["jd_library"][selected_jd]
                         st.rerun()
 
     with col2:
@@ -903,7 +916,7 @@ def main():
 
         # ── Append to screening history ───────────────────────────────────────
         for r in results:
-            st.session_state.screening_history.append({
+            shared["history"].append({
                 "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "jd_name":    eff_jd_name,
                 "candidate":  r.get("file","—").rsplit(".",1)[0] if "." in r.get("file","") else r.get("file","—"),
@@ -1151,11 +1164,11 @@ def main():
     # ══════════════════════════════════════════════════════════════════════════
     # SCREENING HISTORY
     # ══════════════════════════════════════════════════════════════════════════
-    history = st.session_state.get("screening_history", [])
+    history = shared["history"]
     if history:
         st.divider()
         st.subheader("📚 Screening History")
-        st.caption(f"{len(history)} candidate(s) screened this session across all JDs")
+        st.caption(f"{len(history)} candidate(s) screened across all JDs")
 
         # ── Filters ───────────────────────────────────────────────────────────
         hf1, hf2, hf3 = st.columns(3)
@@ -1225,7 +1238,7 @@ def main():
         exp_col, imp_col, clr_col = st.columns(3)
 
         with exp_col:
-            history_json = json.dumps(st.session_state.screening_history, indent=2)
+            history_json = json.dumps(shared["history"], indent=2)
             st.download_button(
                 "📥 Export History (JSON)",
                 data=history_json,
@@ -1239,11 +1252,11 @@ def main():
             if uploaded_hist:
                 try:
                     imported = json.loads(uploaded_hist.read())
-                    existing_keys = {(h["candidate"], h["timestamp"]) for h in st.session_state.screening_history}
+                    existing_keys = {(h["candidate"], h["timestamp"]) for h in shared["history"]}
                     added = 0
                     for entry in imported:
                         if (entry.get("candidate"), entry.get("timestamp")) not in existing_keys:
-                            st.session_state.screening_history.append(entry)
+                            shared["history"].append(entry)
                             added += 1
                     st.success(f"✅ Imported {added} new record(s)")
                     st.rerun()
@@ -1252,17 +1265,17 @@ def main():
         with clr_col:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🗑️ Clear History", key="clear_history_btn", use_container_width=True):
-                st.session_state.screening_history = []
+                shared["history"].clear()
                 st.rerun()
 
         # ── JD Library export/import ───────────────────────────────────────────
-        if st.session_state.jd_library:
+        if shared["jd_library"]:
             st.markdown("---")
             st.markdown("##### 📂 JD Library")
-            st.caption(f"{len(st.session_state.jd_library)} JD(s) saved this session")
+            st.caption(f"{len(shared['jd_library'])} JD(s) saved")
             jl_exp, jl_imp = st.columns(2)
             with jl_exp:
-                jd_lib_json = json.dumps(st.session_state.jd_library, indent=2)
+                jd_lib_json = json.dumps(shared["jd_library"], indent=2)
                 st.download_button(
                     "📥 Export JD Library (JSON)",
                     data=jd_lib_json,
@@ -1276,7 +1289,7 @@ def main():
                 if uploaded_jdlib:
                     try:
                         imported_lib = json.loads(uploaded_jdlib.read())
-                        st.session_state.jd_library.update(imported_lib)
+                        shared["jd_library"].update(imported_lib)
                         st.success(f"✅ Loaded {len(imported_lib)} JD(s)")
                         st.rerun()
                     except Exception as e:
