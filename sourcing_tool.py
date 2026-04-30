@@ -109,19 +109,32 @@ def extract_pdf(file_bytes: bytes) -> str:
     text = ""
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
-            # Strategy 1: standard extract
+            # Strategy 1: standard text extract
             page_text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
 
-            # Strategy 2: if too little, try with looser tolerances
+            # Strategy 2: looser tolerances if too little text
             if len(page_text.strip()) < 30:
                 page_text = page.extract_text(x_tolerance=6, y_tolerance=6) or ""
 
-            # Strategy 3: if still empty, reconstruct from words
+            # Strategy 3: word-by-word reconstruction if still empty
             if len(page_text.strip()) < 30:
                 words = page.extract_words(x_tolerance=5, y_tolerance=5,
-                                           keep_blank_chars=False,
-                                           use_text_flow=True)
+                                           keep_blank_chars=False, use_text_flow=True)
                 page_text = " ".join(w["text"] for w in words)
+
+            # Always extract tables too — many CVs store work history/education in tables
+            try:
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        row_text = "  |  ".join(
+                            str(cell).strip() for cell in row
+                            if cell and str(cell).strip()
+                        )
+                        if row_text and row_text not in page_text:
+                            page_text += "\n" + row_text
+            except Exception:
+                pass
 
             text += page_text + "\n"
 
@@ -197,7 +210,7 @@ def _call_llm(provider: str, api_key: str, model: str, prompt: str) -> str:
 def rank_profile(api_key: str, provider: str, model: str,
                  jd_text: str, profile_text: str, file_name: str,
                  mandatory_reqs: str, additional_criteria: str,
-                 panel_feedback: list, skills_to_verify: list) -> dict:
+                 skills_to_verify: list) -> dict:
 
     mandatory_section = ""
     if mandatory_reqs.strip():
@@ -214,19 +227,15 @@ RULES:
     additional_section = ""
     if additional_criteria.strip():
         additional_section = f"""
-=== ADDITIONAL RECRUITER CRITERIA ===
-{additional_criteria}
-State clearly: meets / partially meets / does not meet for each criterion.
-"""
+=== ADDITIONAL HIRING CRITERIA (carries 25% of overall score) ===
+These are skills and expectations the hiring manager requires BEYOND what is written in the JD.
+Evaluate the candidate against EACH item below and state clearly:
+  - Meets: clearly evidenced in resume
+  - Partially Meets: mentioned but limited depth/evidence
+  - Does Not Meet: not found in resume
+Score additional_criteria_match_pct as: (Meets × 1.0 + Partially Meets × 0.5) / total items × 100
 
-    panel_section = ""
-    if panel_feedback:
-        lines = "\n".join(f"- [{fb['round']}]: {fb['feedback']}" for fb in panel_feedback)
-        panel_section = f"""
-=== PANEL FEEDBACK FROM PREVIOUS INTERVIEWS ===
-{lines}
-- If resume shows same weakness → add to risk_flags, penalise -10 pts per issue.
-- If resume clearly addresses the concern → note as strength.
+{additional_criteria}
 """
 
     skills_section = ""
@@ -240,15 +249,19 @@ State clearly: meets / partially meets / does not meet for each criterion.
 For EACH skill below, check the resume carefully and decide: Present / Partial / Absent.
 "Present" only if clearly, explicitly stated with evidence. "Partial" if vaguely mentioned.
 "Absent" if not mentioned at all. Include your finding in skills_checklist.
+IMPORTANT: Search the ENTIRE resume including certifications tables, project descriptions,
+technical skills sections, and summary. For certifications, check the certifications table
+AND any badges or accreditation mentions anywhere in the document.
 
 {skill_lines}
 """
 
     prompt = f"""You are a strict, senior Technical Recruiter and Hiring Manager.
-Evaluate the candidate ONLY against the Job Description provided below.
-Do NOT apply assumptions, industry defaults, or role-specific biases from outside the JD.
-Every gap, strength, and penalty must be traceable back to something in the JD or the resume.
-Never penalise a candidate for not having something the JD does not ask for.
+Evaluate the candidate against the Job Description AND the Additional Hiring Criteria below.
+The JD defines the baseline requirements. The Additional Hiring Criteria reflect what the
+hiring manager specifically expects — treat both as equally important inputs to your evaluation.
+Every gap and strength must be traceable back to the JD, the Additional Criteria, or the resume.
+Do NOT invent requirements that appear in neither the JD nor the Additional Criteria.
 
 {mandatory_section}
 {additional_section}
@@ -265,6 +278,7 @@ Extract factual information directly from the resume. Be thorough — read the E
    - Calculate duration_months precisely. If only years given (e.g. 2020–2021), estimate as 12 months.
    - short_tenure: set to TRUE if duration_months < 12. THIS IS MANDATORY — check every single role without exception.
    - Multiple roles at the same company count as one employer but list each role separately.
+   IMPORTANT: Many CVs use a project-based or consulting format where experience appears as "Project #1", "Project #2", etc., or in table rows. Treat EACH project entry as a distinct role. Extract company, title, and dates from the table row or nearby text. Do NOT skip entries just because they are labelled "Project" instead of a traditional job title.
 
 2. TOTAL EXPERIENCE — sum ALL duration_months across all roles (excluding gap periods), then express as years and months label.
 
@@ -295,39 +309,40 @@ Read the Job Description carefully.
 ════════════════════════════════════════════
 PART C — SCORING PENALTIES (JD-BASED ONLY)
 ════════════════════════════════════════════
-Start from 100. Deduct only for gaps that matter to THIS JD:
+Start from 100. Apply penalties for gaps against the JD AND Additional Criteria:
 
 - Each missing must-have skill from the JD: -10 pts each
 - Experience below JD-required years by more than 2 years: -12 pts
 - Role or domain clearly irrelevant to the JD: -15 pts
-- Job hopping: if 2 or more DISTINCT employers had tenure < 12 months in the last 5 years: -10 pts. Count each short-tenure employer separately.
+- Job hopping: if 2 or more DISTINCT employers had tenure < 12 months in the last 5 years: -10 pts
 - Unexplained career gap > 6 months: -8 pts
-- Each verified skill (from skills_to_verify) marked Absent: -5 pts
-- Panel feedback weakness present in this resume: -10 pts per issue
+- Each verified skill (from Skills to Verify) marked Absent that is also required by JD or Additional Criteria: -5 pts
 
-DO NOT penalise for anything not asked for in the JD.
+DO NOT penalise for anything not in the JD or Additional Criteria.
 Penalties stack. Be honest but fair.
 
 ════════════════════════════════════════════
 PART D — OVERALL SCORING & VERDICT
 ════════════════════════════════════════════
-Sub-scores (0–100 each, after penalties):
-- must_have_match_pct:          % of must-have JD requirements clearly present
-- good_to_have_match_pct:       % of good-to-have JD requirements present
-- experience_match_pct:         relevance + depth + years vs JD requirement
-- additional_criteria_match_pct: match against recruiter additional criteria (100 if none set)
+Sub-scores (0–100 each):
+- must_have_match_pct:           % of must-have JD requirements clearly present in resume
+- good_to_have_match_pct:        % of good-to-have JD requirements present
+- experience_match_pct:          relevance + depth + years vs JD requirement
+- additional_criteria_match_pct: % match against Additional Hiring Criteria
+                                 (Meets=100%, Partially Meets=50%, Does Not Meet=0% per item)
+                                 Set to 100 only if no additional criteria were provided.
 
-overall_score = (must_have × 0.40) + (experience × 0.30) + (good_to_have × 0.20) + (additional × 0.10)
+overall_score = (must_have × 0.35) + (experience × 0.25) + (good_to_have × 0.15) + (additional × 0.25)
 
 Score guide:
-  85–100: Exceptional — exceeds all JD requirements with strong evidence
-  70–84:  Strong — meets nearly all JD requirements, minor gaps only
-  55–69:  Average — meets core requirements but has clear gaps vs JD
-  35–54:  Weak — significant gaps against JD requirements
-  0–34:   Poor — missing most JD requirements or failed mandatory
+  85–100: Exceptional — exceeds JD + additional criteria with strong evidence
+  70–84:  Strong — meets nearly all requirements, minor gaps only
+  55–69:  Average — meets core requirements but has clear gaps
+  35–54:  Weak — significant gaps against JD or additional criteria
+  0–34:   Poor — missing most requirements or failed mandatory check
 
-VERDICT (based solely on JD match):
-"Strong Select" → overall_score ≥ 80 AND must_have_match_pct ≥ 80
+VERDICT:
+"Strong Select" → overall_score ≥ 80 AND must_have_match_pct ≥ 75 AND additional_criteria_match_pct ≥ 70
 "Consider"      → overall_score ≥ 55 AND does not meet Strong Select threshold
 "Reject"        → overall_score < 55 OR mandatory_met = false
 
@@ -707,7 +722,7 @@ def main():
 
         # ── Additional Criteria ──────────────────────────────────────────────
         st.header("🎯 Additional Criteria")
-        st.caption("Preferences, domain, culture fit, etc.")
+        st.caption("Hiring manager expectations beyond the JD — carries **25% of the overall score**")
         additional_criteria = st.text_area(
             "Free text",
             placeholder=(
@@ -843,36 +858,6 @@ def main():
                     if st.button("🗑️", key=f"rm_paste_{i}"):
                         st.session_state.pasted_profiles.pop(i); st.rerun()
 
-    # ── Panel Feedback ────────────────────────────────────────────────────────
-    if "panel_feedback" not in st.session_state:
-        st.session_state.panel_feedback = []
-
-    with st.expander("🗣️  Step 4 (Optional): Panel Feedback"):
-        st.caption("Add interview observations — AI screens remaining CVs for the same weaknesses.")
-        fb1, fb2 = st.columns([1,3])
-        with fb1:
-            fb_round = st.text_input("Round / Panel", placeholder="Technical Round 1",
-                                     key="fb_round_input")
-        with fb2:
-            fb_text = st.text_area("Observations",
-                placeholder="e.g. Candidate lacked Unity Catalog depth, couldn't explain SCD in Delta…",
-                height=100, key="fb_text_input")
-        if st.button("➕ Add Feedback", key="add_fb_btn"):
-            if fb_text.strip():
-                lbl = fb_round.strip() or f"Round {len(st.session_state.panel_feedback)+1}"
-                st.session_state.panel_feedback.append({"round": lbl, "feedback": fb_text.strip()})
-                st.rerun()
-            else:
-                st.warning("Enter observations first.")
-        if st.session_state.panel_feedback:
-            st.markdown(f"**{len(st.session_state.panel_feedback)} feedback entry(s) active:**")
-            for i, fb in enumerate(st.session_state.panel_feedback):
-                fa, fb_btn = st.columns([5,1])
-                with fa:
-                    st.markdown(f"**{fb['round']}:** {fb['feedback'][:120]}{'…' if len(fb['feedback'])>120 else ''}")
-                with fb_btn:
-                    if st.button("🗑️", key=f"rm_fb_{i}"):
-                        st.session_state.panel_feedback.pop(i); st.rerun()
 
     st.divider()
 
@@ -920,14 +905,12 @@ def main():
         err_holder    = st.container()
         total         = len(profile_files) + len(pasted_profiles)
         counter       = 0
-        panel_feedback = st.session_state.get("panel_feedback", [])
-
         def _run(text, name):
             return rank_profile(
                 api_key, provider, model,
                 jd_text, text, name,
                 mandatory_reqs, additional_criteria,
-                panel_feedback, skills_to_verify
+                skills_to_verify
             )
 
         for pfile in profile_files:
@@ -1126,9 +1109,22 @@ def main():
             with tab2:
                 sc_list = r.get("skills_checklist", [])
                 if sc_list:
+                    # Deduplicate: if same skill appears twice, keep the better status
+                    status_rank = {"Present": 0, "Partial": 1, "Absent": 2}
+                    seen = {}
+                    for s in sc_list:
+                        skill_key = s.get("skill","").lower().strip()
+                        if skill_key not in seen:
+                            seen[skill_key] = s
+                        else:
+                            existing = seen[skill_key]
+                            if status_rank.get(s.get("status","Absent"), 2) < status_rank.get(existing.get("status","Absent"), 2):
+                                seen[skill_key] = s
+                    sc_list_deduped = list(seen.values())
+
                     st.markdown("##### 🔍 Skills Verification Results")
                     rows = []
-                    for s in sc_list:
+                    for s in sc_list_deduped:
                         status = s.get("status","—")
                         if status == "Present":
                             icon = "✅ Present"
@@ -1142,15 +1138,14 @@ def main():
                             "Evidence":  s.get("evidence","—"),
                         })
 
-                    # Colour-coded table via markdown
                     st.markdown("| Skill | Status | Evidence |")
                     st.markdown("|:---|:---:|:---|")
                     for row in rows:
                         st.markdown(f"| {row['Skill']} | {row['Status']} | {row['Evidence']} |")
 
-                    present  = sum(1 for s in sc_list if s.get("status")=="Present")
-                    partial  = sum(1 for s in sc_list if s.get("status")=="Partial")
-                    absent   = sum(1 for s in sc_list if s.get("status")=="Absent")
+                    present  = sum(1 for s in sc_list_deduped if s.get("status")=="Present")
+                    partial  = sum(1 for s in sc_list_deduped if s.get("status")=="Partial")
+                    absent   = sum(1 for s in sc_list_deduped if s.get("status")=="Absent")
                     st.markdown(f"\n✅ **{present} Present** &nbsp;|&nbsp; 🟡 **{partial} Partial** &nbsp;|&nbsp; ❌ **{absent} Absent**")
                 else:
                     if skills_to_verify:
@@ -1184,12 +1179,12 @@ def main():
                     add = r.get("additional_criteria_match_pct","—")
 
                     st.markdown(f"""
-| Criterion | Score |
-|:---|---:|
-| Must-Have Skills | {mh}% |
-| Good-to-Have Skills | {gth}% |
-| Experience Match | {exp}% |
-| Additional Criteria | {add}% |
+| Criterion | Weight | Score |
+|:---|:---:|---:|
+| Must-Have Skills (JD) | 35% | {mh}% |
+| Experience Match | 25% | {exp}% |
+| Additional Criteria | 25% | {add}% |
+| Good-to-Have Skills (JD) | 15% | {gth}% |
 """)
                     st.markdown(f"**Verdict:** `{verdict}`   **Confidence:** `{confidence}`")
                     st.markdown(f"**Seniority:** `{r.get('seniority_alignment','N/A')}`")
