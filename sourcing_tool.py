@@ -524,8 +524,22 @@ def _store():
 def main():
     config = load_config()
 
-    st.title("🎯 AI Profile Ranker")
-    st.caption("Evaluate and rank candidates — powered by Claude, ChatGPT, Groq, Gemini, Mistral and more")
+    # ── Logo ──────────────────────────────────────────────────────────────────
+    logo_path = Path(__file__).parent / "DN Logo.jpg"
+    if logo_path.exists():
+        st.logo(str(logo_path))
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    if logo_path.exists():
+        hcol1, hcol2 = st.columns([1, 5])
+        with hcol1:
+            st.image(str(logo_path), width=100)
+        with hcol2:
+            st.title("🎯 AI Profile Ranker")
+            st.caption("Evaluate and rank candidates — powered by Claude, ChatGPT, Groq, Gemini, Mistral and more")
+    else:
+        st.title("🎯 AI Profile Ranker")
+        st.caption("Evaluate and rank candidates — powered by Claude, ChatGPT, Groq, Gemini, Mistral and more")
     st.divider()
 
     # ═══════════════════════════════════════════
