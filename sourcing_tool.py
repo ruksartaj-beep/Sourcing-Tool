@@ -109,20 +109,57 @@ def extract_pdf(file_bytes: bytes) -> str:
     text = ""
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
-            text += (page.extract_text() or "") + "\n"
+            # Strategy 1: standard extract
+            page_text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
+
+            # Strategy 2: if too little, try with looser tolerances
+            if len(page_text.strip()) < 30:
+                page_text = page.extract_text(x_tolerance=6, y_tolerance=6) or ""
+
+            # Strategy 3: if still empty, reconstruct from words
+            if len(page_text.strip()) < 30:
+                words = page.extract_words(x_tolerance=5, y_tolerance=5,
+                                           keep_blank_chars=False,
+                                           use_text_flow=True)
+                page_text = " ".join(w["text"] for w in words)
+
+            text += page_text + "\n"
+
     return text.strip()
 
 def extract_docx(file_bytes: bytes) -> str:
     doc = Document(io.BytesIO(file_bytes))
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip()).strip()
+    parts = []
+    for para in doc.paragraphs:
+        if para.text.strip():
+            parts.append(para.text.strip())
+    # Also extract text from tables inside docx
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = "  |  ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+            if row_text:
+                parts.append(row_text)
+    return "\n".join(parts).strip()
 
 def extract_text(uploaded_file) -> str:
     file_bytes = uploaded_file.read()
     uploaded_file.seek(0)
     name = uploaded_file.name.lower()
-    if name.endswith(".pdf"):   return extract_pdf(file_bytes)
-    if name.endswith(".docx"):  return extract_docx(file_bytes)
+    if name.endswith(".pdf"):  return extract_pdf(file_bytes)
+    if name.endswith(".docx"): return extract_docx(file_bytes)
     return ""
+
+def is_image_based_pdf(file_bytes: bytes) -> bool:
+    """Returns True if PDF has almost no extractable text (likely scanned)."""
+    try:
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            total_chars = sum(
+                len((page.extract_text() or "").strip())
+                for page in pdf.pages[:3]
+            )
+        return total_chars < 100
+    except Exception:
+        return False
 
 # ── LLM router ────────────────────────────────────────────────────────────────
 def _call_llm(provider: str, api_key: str, model: str, prompt: str) -> str:
@@ -889,8 +926,25 @@ def main():
         for pfile in profile_files:
             prog.progress(int(counter/total*100), text=f"Evaluating {counter+1}/{total}: {pfile.name}…")
             try:
+                file_bytes = pfile.read(); pfile.seek(0)
+                if pfile.name.lower().endswith(".pdf") and is_image_based_pdf(file_bytes):
+                    err_holder.warning(
+                        f"⚠️ **'{pfile.name}'** appears to be a **scanned/image-based PDF** — "
+                        f"text cannot be extracted automatically. "
+                        f"Please copy-paste the resume text using Step 3 (Paste Resume Text)."
+                    )
+                    results.append(_error_result(pfile.name, "Scanned PDF — no extractable text"))
+                    counter += 1
+                    continue
                 pt = extract_text(pfile)
-                if not pt.strip(): raise ValueError("No text extracted — may be image-based")
+                if not pt.strip():
+                    err_holder.warning(
+                        f"⚠️ **'{pfile.name}'** — no text could be extracted. "
+                        f"Try copy-pasting the resume using Step 3."
+                    )
+                    results.append(_error_result(pfile.name, "No text extracted"))
+                    counter += 1
+                    continue
                 a = _run(pt, pfile.name)
                 a["file"] = pfile.name
                 results.append(a)
