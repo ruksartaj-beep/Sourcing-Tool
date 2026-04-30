@@ -876,6 +876,13 @@ def main():
 
     st.divider()
 
+    # ── Resolve effective JD from library if nothing else provided ────────────
+    if selected_jd != "— New JD —" and not jd_file and not jd_pasted_text.strip():
+        jd_pasted_text = shared["jd_library"].get(selected_jd, "")
+        jd_pasted_name = selected_jd
+        if jd_pasted_text:
+            st.success(f"✅ JD loaded from library: **{selected_jd}** ({len(jd_pasted_text):,} chars)")
+
     # ── Readiness check ───────────────────────────────────────────────────────
     pasted_profiles  = st.session_state.get("pasted_profiles", [])
     skills_to_verify = st.session_state.get("skills_to_verify", [])
