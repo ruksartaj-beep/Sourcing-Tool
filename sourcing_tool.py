@@ -531,9 +531,9 @@ def main():
 
     # ── Header ────────────────────────────────────────────────────────────────
     if logo_path.exists():
-        hcol1, hcol2 = st.columns([1, 5])
+        hcol1, hcol2 = st.columns([1, 3])
         with hcol1:
-            st.image(str(logo_path), width=100)
+            st.image(str(logo_path), width=220)
         with hcol2:
             st.title("🎯 AI Profile Ranker")
             st.caption("Evaluate and rank candidates — powered by Claude, ChatGPT, Groq, Gemini, Mistral and more")
